@@ -101,7 +101,7 @@ class TestCinderOperatorCharm(test_utils.CharmTestCase):
             {"ingress-address": "10.0.0.2"},
         )
 
-    def test_service_ready(self):
+    def test_application_ready(self):
         """Test when charm is ready configs are written correctly."""
         self.harness.set_leader()
         self.set_pebble_ready()
@@ -117,7 +117,6 @@ class TestCinderOperatorCharm(test_utils.CharmTestCase):
                 "/etc/apache2/sites-available/wsgi-cinder-api.conf",
             ],
         )
-        # TODO figure out whey this list is incomplete
         self.assertEqual(
             self.container_calls["exec"],
             [
