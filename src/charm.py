@@ -7,8 +7,6 @@ This charm provide Cinder services as part of an OpenStack deployment
 import logging
 from typing import List
 
-import ops.pebble
-
 from ops.framework import StoredState
 from ops.main import main
 
@@ -24,38 +22,6 @@ logger = logging.getLogger(__name__)
 CINDER_API_PORT = 8090
 CINDER_API_CONTAINER = "cinder-api"
 CINDER_SCHEDULER_CONTAINER = "cinder-scheduler"
-
-
-class CinderWSGIPebbleHandler(sunbeam_chandlers.WSGIPebbleHandler):
-    def start_service(self):
-        pass
-
-    def init_service(self, context) -> None:
-        """Enable and start WSGI service"""
-        self.write_config(context)
-        try:
-            self.execute(
-                [
-                    "a2disconf",
-                    "cinder-wsgi"
-                ],
-                exception_on_error=True
-            )
-            self.execute(
-                [
-                    "a2ensite",
-                    self.wsgi_service_name
-                ],
-                exception_on_error=True
-            )
-        except ops.pebble.ExecError:
-            logger.exception(
-                f"Failed to enable {self.wsgi_service_name} site in apache"
-            )
-            # ignore for now - pebble is raising an exited too quickly, but it
-            # appears to work properly.
-        self.start_wsgi()
-        self._state.service_ready = True
 
 
 class CinderSchedulerPebbleHandler(sunbeam_chandlers.PebbleHandler):
@@ -136,17 +102,25 @@ class CinderOperatorCharm(sunbeam_charm.OSBaseOperatorAPICharm):
     """Charm the service."""
 
     _state = StoredState()
-    _authed = False
-    service_name = "cinder"
+    service_name = "cinder-api"
     wsgi_admin_script = "/usr/bin/cinder-wsgi-admin"
     wsgi_public_script = "/usr/bin/cinder-wsgi-public"
 
+    db_sync_cmds = [
+        [
+            "sudo",
+            "-u",
+            "cinder",
+            "cinder-manage",
+            "--config-dir",
+            "/etc/cinder",
+            "db",
+            "sync",
+        ]
+    ]
+
     def __init__(self, framework):
         super().__init__(framework)
-        self._state.set_default(admin_domain_name="admin_domain")
-        self._state.set_default(admin_domain_id=None)
-        self._state.set_default(default_domain_id=None)
-        self._state.set_default(service_project_id=None)
 
     def get_relation_handlers(
         self, handlers=None
@@ -160,6 +134,21 @@ class CinderOperatorCharm(sunbeam_charm.OSBaseOperatorAPICharm):
             handlers.append(self.sb_svc)
         handlers = super().get_relation_handlers(handlers)
         return handlers
+
+    @property
+    def service_conf(self) -> str:
+        """Service default configuration file."""
+        return f"/etc/cinder/cinder.conf"
+
+    @property
+    def service_user(self) -> str:
+        """Service user file and directory ownership."""
+        return "cinder"
+
+    @property
+    def service_group(self) -> str:
+        """Service group file and directory ownership."""
+        return "cinder"
 
     @property
     def service_endpoints(self):
@@ -183,17 +172,8 @@ class CinderOperatorCharm(sunbeam_charm.OSBaseOperatorAPICharm):
         ]
 
     def get_pebble_handlers(self):
-        pebble_handlers = [
-            CinderWSGIPebbleHandler(
-                self,
-                CINDER_API_CONTAINER,
-                self.service_name,
-                self.container_configs,
-                self.template_dir,
-                self.openstack_release,
-                self.configure_charm,
-                f"wsgi-{self.service_name}",
-            ),
+        handlers = super().get_pebble_handlers()
+        handlers.append(
             CinderSchedulerPebbleHandler(
                 self,
                 CINDER_SCHEDULER_CONTAINER,
@@ -203,8 +183,8 @@ class CinderOperatorCharm(sunbeam_charm.OSBaseOperatorAPICharm):
                 self.openstack_release,
                 self.configure_charm,
             ),
-        ]
-        return pebble_handlers
+        )
+        return handlers
 
     @property
     def default_public_ingress_port(self):
@@ -213,34 +193,6 @@ class CinderOperatorCharm(sunbeam_charm.OSBaseOperatorAPICharm):
     @property
     def wsgi_container_name(self):
         return CINDER_API_CONTAINER
-
-    def _do_bootstrap(self):
-        """
-        Starts the appropriate services in the order they are needed.
-        If the service has not yet been bootstrapped, then this will
-         1. Create the database
-        """
-        super()._do_bootstrap()
-        try:
-            logger.info("Syncing database...")
-            pebble_handler = self.get_named_pebble_handler(
-                CINDER_SCHEDULER_CONTAINER
-            )
-            pebble_handler.execute([
-                "sudo",
-                "-u",
-                "cinder",
-                "cinder-manage",
-                "--config-dir",
-                "/etc/cinder",
-                "db",
-                "sync"],
-                exception_on_error=True
-            )
-        except ops.pebble.ExecError:
-            logger.exception("Failed to bootstrap")
-            self._state.bootstrapped = False
-            return
 
     def configure_charm(self, event) -> None:
         super().configure_charm(event)
