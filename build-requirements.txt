@@ -1,2 +1,0 @@
-git+https://github.com/canonical/charmcraft.git@0.10.2#egg=charmcraft
-
